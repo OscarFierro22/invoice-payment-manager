@@ -5,12 +5,21 @@ def mostrar_menu(
     page: ft.Page,
     abrir_factura,
     abrir_empresa,
+    abrir_productos,
 ):
     """
     Construye y muestra el menú principal.
     """
 
     page.clean()
+
+    # Algunas pantallas utilizan scroll.
+    # Al regresar al menú lo dejamos en su estado normal.
+    page.scroll = None
+
+    # ---------------------------------------------------------
+    # MENSAJE DE ESTADO
+    # ---------------------------------------------------------
 
     status_text = ft.Text(
         "Seleccione una opción del menú.",
@@ -22,10 +31,16 @@ def mostrar_menu(
     # ---------------------------------------------------------
 
     def registrar_factura(e):
+
         abrir_factura()
 
     def registrar_empresa(e):
+
         abrir_empresa()
+
+    def gestionar_productos(e):
+
+        abrir_productos()
 
     def registrar_pago(e):
 
@@ -62,7 +77,7 @@ def mostrar_menu(
                     color=ft.Colors.WHITE,
                 ),
                 ft.Text(
-                    "Control de Facturas y Pagos",
+                    "Control de Compras, Facturación y Pagos",
                     size=16,
                     color=ft.Colors.WHITE,
                 ),
@@ -79,6 +94,11 @@ def mostrar_menu(
         spacing=15,
         run_spacing=15,
         controls=[
+
+            # -------------------------------------------------
+            # FACTURAS
+            # -------------------------------------------------
+
             ft.Button(
                 content="Registrar factura",
                 height=70,
@@ -89,6 +109,11 @@ def mostrar_menu(
                     "lg": 3,
                 },
             ),
+
+            # -------------------------------------------------
+            # PAGOS
+            # -------------------------------------------------
+
             ft.Button(
                 content="Registrar pago",
                 height=70,
@@ -99,6 +124,11 @@ def mostrar_menu(
                     "lg": 3,
                 },
             ),
+
+            # -------------------------------------------------
+            # BÚSQUEDA
+            # -------------------------------------------------
+
             ft.Button(
                 content="Buscar",
                 height=70,
@@ -109,10 +139,30 @@ def mostrar_menu(
                     "lg": 3,
                 },
             ),
+
+            # -------------------------------------------------
+            # EMPRESAS
+            # -------------------------------------------------
+
             ft.Button(
-                content="Registrar empresa",
+                content="Empresas",
                 height=70,
                 on_click=registrar_empresa,
+                col={
+                    "xs": 12,
+                    "sm": 6,
+                    "lg": 3,
+                },
+            ),
+
+            # -------------------------------------------------
+            # PRODUCTOS
+            # -------------------------------------------------
+
+            ft.Button(
+                content="Productos",
+                height=70,
+                on_click=gestionar_productos,
                 col={
                     "xs": 12,
                     "sm": 6,
@@ -122,17 +172,24 @@ def mostrar_menu(
         ],
     )
 
+    # ---------------------------------------------------------
+    # MOSTRAR PANTALLA
+    # ---------------------------------------------------------
+
     page.add(
         ft.SafeArea(
             content=ft.Column(
                 controls=[
                     encabezado,
+
                     ft.Text(
                         "Menú principal",
                         size=20,
                         weight=ft.FontWeight.BOLD,
                     ),
+
                     menu,
+
                     status_text,
                 ],
                 spacing=20,

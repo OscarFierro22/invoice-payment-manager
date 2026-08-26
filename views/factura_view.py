@@ -5,52 +5,81 @@ import flet as ft
 
 from services.empresa_service import listar_empresas
 
+from services.factura_service import (
+    calcular_totales,
+    registrar_factura,
+)
+
 from utils.validators import (
+    validar_credito_dias,
     validar_fecha,
-    validar_ruc,
     validar_texto_obligatorio,
-    validar_total,
 )
 
 
-def mostrar_registro_factura(page: ft.Page, volver_menu):
+def mostrar_registro_factura(
+    page: ft.Page,
+    volver_menu,
+):
     """
-    Pantalla para registrar una factura.
+    Pantalla para registrar una factura completa.
 
-    Funciones actuales:
-    - Carga las empresas una sola vez al abrir la pantalla.
-    - Busca empresas en memoria.
-    - Filtra por nombre.
-    - Filtra por RUC.
-    - Autocompleta nombre y RUC al seleccionar.
-    - Permite escribir la fecha manualmente.
-    - Permite seleccionar la fecha con calendario.
-    - Valida los datos.
+    Permite:
 
-    Todavía no guarda la factura en Excel.
+    - Seleccionar un cliente.
+    - Buscarlo por nombre o RUC.
+    - Obtener su crédito predeterminado.
+    - Registrar varios detalles.
+    - Calcular subtotal, IVA y total.
+    - Guardar factura y detalles en Excel.
     """
 
     page.clean()
 
+    page.scroll = ft.ScrollMode.AUTO
+
     # =========================================================
-    # NORMALIZACIÓN DE TEXTO
+    # CONFIGURACIÓN
+    # =========================================================
+
+    LIMITE_SUGERENCIAS = 8
+
+    # =========================================================
+    # EMPRESA SELECCIONADA
+    # =========================================================
+
+    empresa_seleccionada_id = {
+        "valor": None
+    }
+
+    # =========================================================
+    # DETALLES TEMPORALES DE LA FACTURA
+    # =========================================================
+
+    detalles_factura = []
+
+    # =========================================================
+    # NORMALIZACIÓN PARA BÚSQUEDA
     # =========================================================
 
     def normalizar_texto(texto):
         """
-        Prepara un texto para realizar búsquedas.
+        Convierte texto a una forma apropiada para búsqueda.
 
         Ejemplos:
-        "Hotel Río Amazonas" -> "hotel rio amazonas"
-        " RÍO "              -> "rio"
 
-        Esto permite que:
-        rio
-        encuentre:
-        Río
+            Río Amazonas
+                ↓
+            rio amazonas
+
+            SHERATON
+                ↓
+            sheraton
         """
 
-        texto = str(texto or "").strip().lower()
+        texto = str(
+            texto or ""
+        ).strip().lower()
 
         texto = unicodedata.normalize(
             "NFD",
@@ -60,229 +89,256 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
         texto = "".join(
             caracter
             for caracter in texto
-            if unicodedata.category(caracter) != "Mn"
+            if unicodedata.category(
+                caracter
+            ) != "Mn"
         )
 
         return texto
 
     # =========================================================
-    # CACHÉ DE EMPRESAS
+    # CARGAR CLIENTES UNA SOLA VEZ
     # =========================================================
 
-    def cargar_empresas():
-        """
-        Lee las empresas desde Excel UNA SOLA VEZ
-        al abrir esta pantalla.
+    empresas_excel = listar_empresas()
 
-        Además crea campos auxiliares normalizados
-        para acelerar las búsquedas posteriores.
-        """
+    empresas_cache = []
 
-        empresas_excel = listar_empresas()
+    for empresa in empresas_excel:
 
-        empresas_preparadas = []
+        # No mostrar empresas inactivas.
+        if not empresa["activo"]:
+            continue
 
-        for empresa in empresas_excel:
+        # Solamente clientes o empresas de tipo AMBOS
+        # pueden ser receptores de una factura.
+        if empresa["tipo"] not in {
+            "CLIENTE",
+            "AMBOS",
+        }:
+            continue
 
-            empresa_preparada = {
-                "id": empresa["id"],
-                "nombre": empresa["nombre"],
-                "ruc": empresa["ruc"],
-
-                # Estos dos campos solo se usan
-                # internamente para buscar.
-                "_nombre_busqueda": normalizar_texto(
-                    empresa["nombre"]
-                ),
-                "_ruc_busqueda": normalizar_texto(
-                    empresa["ruc"]
-                ),
-            }
-
-            empresas_preparadas.append(
-                empresa_preparada
-            )
-
-        return empresas_preparadas
-
-    # ESTA ES NUESTRA CACHÉ.
-    #
-    # listar_empresas() solamente se ejecuta aquí,
-    # cuando se abre Registrar factura.
-    empresas_cache = cargar_empresas()
-
-    # =========================================================
-    # FILTRAR EMPRESAS EN MEMORIA
-    # =========================================================
-
-    def filtrar_empresas(
-        texto,
-        campo,
-        limite=8,
-    ):
-        """
-        Busca dentro de empresas_cache.
-
-        NO abre Excel.
-
-        campo:
-        - "nombre"
-        - "ruc"
-        """
-
-        texto_busqueda = normalizar_texto(
-            texto
+        empresas_cache.append(
+            empresa
         )
 
-        if texto_busqueda == "":
-            return []
-
-        coincidencias_inicio = []
-        coincidencias_parciales = []
-
-        for empresa in empresas_cache:
-
-            if campo == "nombre":
-                valor = empresa[
-                    "_nombre_busqueda"
-                ]
-
-            elif campo == "ruc":
-                valor = empresa[
-                    "_ruc_busqueda"
-                ]
-
-            else:
-                continue
-
-            # ---------------------------------------------
-            # PRIORIDAD 1:
-            # empieza exactamente por lo escrito
-            # ---------------------------------------------
-
-            if valor.startswith(
-                texto_busqueda
-            ):
-                coincidencias_inicio.append(
-                    empresa
-                )
-
-            # ---------------------------------------------
-            # PRIORIDAD 2:
-            # contiene el texto en otra posición
-            # ---------------------------------------------
-
-            elif texto_busqueda in valor:
-                coincidencias_parciales.append(
-                    empresa
-                )
-
-        resultados = (
-            coincidencias_inicio
-            + coincidencias_parciales
-        )
-
-        return resultados[:limite]
-
     # =========================================================
-    # MENSAJES DE ERROR
+    # CAMPOS PRINCIPALES DE FACTURA
     # =========================================================
 
-    empresa_error = ft.Text(
-        "",
-        color=ft.Colors.RED,
-        size=13,
+    cliente_field = ft.TextField(
+        label="Cliente",
+        hint_text="Buscar por nombre o RUC...",
+    )
+
+    ruc_field = ft.TextField(
+        label="RUC",
+        read_only=True,
+    )
+
+    numero_factura_field = ft.TextField(
+        label="Número de factura",
+        hint_text="Ej: 001-001-000000150",
+    )
+
+    fecha_field = ft.TextField(
+        label="Fecha de emisión",
+        hint_text="dd/mm/aaaa",
+        value=datetime.now().strftime(
+            "%d/%m/%Y"
+        ),
+    )
+
+    credito_field = ft.TextField(
+        label="Crédito",
+        value="0",
+        suffix="días",
+    )
+
+    iva_porcentaje_field = ft.TextField(
+        label="IVA",
+        value="15",
+        suffix="%",
+    )
+
+    # =========================================================
+    # SUGERENCIAS DE EMPRESA
+    # =========================================================
+
+    sugerencias_empresas = ft.Column(
+        spacing=5,
         visible=False,
     )
 
-    ruc_error = ft.Text(
+    # =========================================================
+    # ERRORES DE CABECERA
+    # =========================================================
+
+    cliente_error = ft.Text(
         "",
         color=ft.Colors.RED,
-        size=13,
         visible=False,
     )
 
     numero_factura_error = ft.Text(
         "",
         color=ft.Colors.RED,
-        size=13,
         visible=False,
     )
 
-    fecha_emision_error = ft.Text(
+    fecha_error = ft.Text(
         "",
         color=ft.Colors.RED,
-        size=13,
         visible=False,
     )
 
-    total_error = ft.Text(
+    credito_error = ft.Text(
         "",
         color=ft.Colors.RED,
-        size=13,
         visible=False,
     )
 
-    mensaje = ft.Text(
+    iva_error = ft.Text(
+        "",
+        color=ft.Colors.RED,
+        visible=False,
+    )
+
+    # =========================================================
+    # CAMPOS PARA AGREGAR DETALLES
+    # =========================================================
+
+    tipo_item_field = ft.Dropdown(
+        label="Tipo",
+        value="MANTENIMIENTO",
+        options=[
+            ft.DropdownOption(
+                key="EQUIPO",
+                text="Equipo",
+            ),
+            ft.DropdownOption(
+                key="REPUESTO",
+                text="Repuesto",
+            ),
+            ft.DropdownOption(
+                key="MATERIAL",
+                text="Material",
+            ),
+            ft.DropdownOption(
+                key="SERVICIO",
+                text="Servicio",
+            ),
+            ft.DropdownOption(
+                key="MANTENIMIENTO",
+                text="Mantenimiento",
+            ),
+            ft.DropdownOption(
+                key="MANO_DE_OBRA",
+                text="Mano de obra",
+            ),
+            ft.DropdownOption(
+                key="OTRO",
+                text="Otro",
+            ),
+        ],
+    )
+
+    descripcion_field = ft.TextField(
+        label="Descripción",
+        hint_text=(
+            "Ej: Mantenimiento preventivo "
+            "de cámara frigorífica"
+        ),
+    )
+
+    cantidad_field = ft.TextField(
+        label="Cantidad",
+        value="1",
+    )
+
+    precio_unitario_field = ft.TextField(
+        label="Precio unitario",
+        hint_text="Ej: 150.00",
+        prefix="$",
+    )
+
+    detalle_error = ft.Text(
+        "",
+        color=ft.Colors.RED,
+        visible=False,
+    )
+
+    # =========================================================
+    # LISTA VISUAL DE DETALLES
+    # =========================================================
+
+    lista_detalles = ft.Column(
+        spacing=10,
+    )
+
+    # =========================================================
+    # TOTALES
+    # =========================================================
+
+    subtotal_text = ft.Text(
+        "Subtotal: $0.00",
+        size=16,
+    )
+
+    iva_text = ft.Text(
+        "IVA: $0.00",
+        size=16,
+    )
+
+    total_text = ft.Text(
+        "TOTAL: $0.00",
+        size=20,
+        weight=ft.FontWeight.BOLD,
+    )
+
+    mensaje_general = ft.Text(
         "",
         size=14,
     )
 
     # =========================================================
-    # LISTAS DE SUGERENCIAS
+    # LIMPIAR ERRORES
     # =========================================================
 
-    sugerencias_empresa = ft.Column(
-        spacing=5,
-        visible=False,
-    )
+    def limpiar_errores_factura():
 
-    sugerencias_ruc = ft.Column(
-        spacing=5,
-        visible=False,
-    )
+        cliente_error.value = ""
+        cliente_error.visible = False
 
-    # =========================================================
-    # CAMPOS
-    # =========================================================
+        numero_factura_error.value = ""
+        numero_factura_error.visible = False
 
-    empresa_field = ft.TextField(
-        label="Empresa / Cliente",
-        hint_text="Empiece a escribir el nombre...",
-    )
+        fecha_error.value = ""
+        fecha_error.visible = False
 
-    ruc_field = ft.TextField(
-        label="RUC",
-        hint_text="Empiece a escribir el RUC...",
-        max_length=13,
-    )
+        credito_error.value = ""
+        credito_error.visible = False
 
-    numero_factura_field = ft.TextField(
-        label="Número de factura",
-        hint_text="001-001-000000001",
-    )
-
-    fecha_emision_field = ft.TextField(
-        label="Fecha de emisión",
-        hint_text="dd/mm/aaaa",
-    )
-
-    total_field = ft.TextField(
-        label="Valor total",
-        hint_text="0.00",
-    )
+        iva_error.value = ""
+        iva_error.visible = False
 
     # =========================================================
     # SELECCIONAR EMPRESA
     # =========================================================
 
-    def seleccionar_empresa(empresa):
+    def seleccionar_empresa(
+        empresa,
+    ):
         """
-        Completa nombre y RUC usando la empresa
-        seleccionada.
+        Guarda internamente el ID de la empresa
+        y llena sus datos visibles.
         """
 
-        empresa_field.value = (
+        empresa_seleccionada_id[
+            "valor"
+        ] = empresa["id"]
+
+        cliente_field.value = (
             empresa["nombre"]
         )
 
@@ -290,281 +346,564 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
             empresa["ruc"]
         )
 
-        # Ocultar resultados.
-        sugerencias_empresa.controls.clear()
-        sugerencias_ruc.controls.clear()
+        credito_field.value = str(
+            empresa["credito_dias"]
+        )
 
-        sugerencias_empresa.visible = False
-        sugerencias_ruc.visible = False
+        sugerencias_empresas.controls.clear()
 
-        # Quitar posibles errores anteriores.
-        empresa_error.value = ""
-        empresa_error.visible = False
+        sugerencias_empresas.visible = False
 
-        ruc_error.value = ""
-        ruc_error.visible = False
+        cliente_error.visible = False
 
         page.update()
 
     # =========================================================
-    # CREAR OPCIÓN VISUAL
+    # BUSCAR EMPRESAS
     # =========================================================
 
-    def crear_opcion_empresa(empresa):
+    def buscar_empresa(e):
         """
-        Convierte una empresa encontrada en
-        una opción seleccionable.
+        Filtra empresas en memoria.
+
+        No abre Excel mientras el usuario escribe.
         """
 
-        texto = (
-            f'{empresa["nombre"]} '
-            f'— RUC: {empresa["ruc"]}'
+        # Si el usuario modifica el texto después de haber
+        # seleccionado una empresa, la selección anterior
+        # deja de ser válida.
+        empresa_seleccionada_id[
+            "valor"
+        ] = None
+
+        ruc_field.value = ""
+
+        texto = normalizar_texto(
+            cliente_field.value
         )
 
-        return ft.Button(
-            content=texto,
-            on_click=lambda e, emp=empresa:
-                seleccionar_empresa(emp),
-        )
+        sugerencias_empresas.controls.clear()
 
-    # =========================================================
-    # BUSCAR POR NOMBRE
-    # =========================================================
+        if texto == "":
 
-    def buscar_por_nombre(e):
-        """
-        Se ejecuta mientras se escribe el nombre.
-
-        IMPORTANTE:
-        la búsqueda ocurre sobre empresas_cache,
-        NO sobre Excel.
-        """
-
-        texto = empresa_field.value or ""
-
-        sugerencias_empresa.controls.clear()
-
-        if texto.strip() == "":
-            sugerencias_empresa.visible = False
+            sugerencias_empresas.visible = False
 
             page.update()
+
             return
 
-        resultados = filtrar_empresas(
-            texto=texto,
-            campo="nombre",
+        coincidencias_inicio = []
+        coincidencias_parciales = []
+
+        for empresa in empresas_cache:
+
+            nombre = normalizar_texto(
+                empresa["nombre"]
+            )
+
+            ruc = str(
+                empresa["ruc"]
+            ).strip()
+
+            # -----------------------------------------------
+            # PRIORIDAD 1:
+            # empieza con el texto buscado.
+            # -----------------------------------------------
+
+            if (
+                nombre.startswith(texto)
+                or ruc.startswith(texto)
+            ):
+
+                coincidencias_inicio.append(
+                    empresa
+                )
+
+            # -----------------------------------------------
+            # PRIORIDAD 2:
+            # contiene el texto buscado.
+            # -----------------------------------------------
+
+            elif (
+                texto in nombre
+                or texto in ruc
+            ):
+
+                coincidencias_parciales.append(
+                    empresa
+                )
+
+        coincidencias = (
+            coincidencias_inicio
+            + coincidencias_parciales
         )
 
-        if not resultados:
-            sugerencias_empresa.visible = False
+        coincidencias = coincidencias[
+            :LIMITE_SUGERENCIAS
+        ]
 
-            page.update()
-            return
+        if not coincidencias:
 
-        for empresa in resultados:
-
-            opcion = crear_opcion_empresa(
-                empresa
+            sugerencias_empresas.controls.append(
+                ft.Text(
+                    "No se encontraron clientes."
+                )
             )
 
-            sugerencias_empresa.controls.append(
-                opcion
-            )
+        else:
 
-        sugerencias_empresa.visible = True
+            for empresa in coincidencias:
 
-        # Solo mostramos una lista de resultados
-        # a la vez.
-        sugerencias_ruc.controls.clear()
-        sugerencias_ruc.visible = False
+                sugerencias_empresas.controls.append(
+                    ft.Button(
+                        content=(
+                            f'{empresa["nombre"]} '
+                            f'— {empresa["ruc"]}'
+                        ),
+                        on_click=(
+                            lambda e, emp=empresa:
+                            seleccionar_empresa(
+                                emp
+                            )
+                        ),
+                    )
+                )
+
+        sugerencias_empresas.visible = True
 
         page.update()
 
-    # =========================================================
-    # BUSCAR POR RUC
-    # =========================================================
-
-    def buscar_por_ruc(e):
-        """
-        Se ejecuta mientras se escribe el RUC.
-
-        También busca únicamente en memoria.
-        """
-
-        texto = ruc_field.value or ""
-
-        sugerencias_ruc.controls.clear()
-
-        if texto.strip() == "":
-            sugerencias_ruc.visible = False
-
-            page.update()
-            return
-
-        resultados = filtrar_empresas(
-            texto=texto,
-            campo="ruc",
-        )
-
-        if not resultados:
-            sugerencias_ruc.visible = False
-
-            page.update()
-            return
-
-        for empresa in resultados:
-
-            opcion = crear_opcion_empresa(
-                empresa
-            )
-
-            sugerencias_ruc.controls.append(
-                opcion
-            )
-
-        sugerencias_ruc.visible = True
-
-        sugerencias_empresa.controls.clear()
-        sugerencias_empresa.visible = False
-
-        page.update()
-
-    # Conectamos los eventos después de crear
-    # las funciones.
-    empresa_field.on_change = (
-        buscar_por_nombre
-    )
-
-    ruc_field.on_change = (
-        buscar_por_ruc
-    )
+    cliente_field.on_change = buscar_empresa
 
     # =========================================================
     # CALENDARIO
     # =========================================================
 
-    def fecha_seleccionada(e):
-        """
-        Copia la fecha seleccionada en el calendario
-        al campo de texto.
-        """
+    def seleccionar_fecha(e):
 
         if selector_fecha.value is None:
             return
 
-        fecha_emision_field.value = (
+        fecha_field.value = (
             selector_fecha.value.strftime(
                 "%d/%m/%Y"
             )
         )
 
-        fecha_emision_error.value = ""
-        fecha_emision_error.visible = False
-
         page.update()
 
     selector_fecha = ft.DatePicker(
-        first_date=datetime(
-            2020,
-            1,
-            1,
-        ),
-        last_date=datetime(
-            2035,
-            12,
-            31,
-        ),
-        current_date=datetime.now(),
-        on_change=fecha_seleccionada,
+        on_change=seleccionar_fecha,
     )
 
     def abrir_calendario(e):
+
         page.show_dialog(
             selector_fecha
         )
 
+    boton_calendario = ft.Button(
+        content="Calendario",
+        on_click=abrir_calendario,
+    )
+
     # =========================================================
-    # FUNCIONES PARA ERRORES
+    # ACTUALIZAR TOTALES
     # =========================================================
 
-    def mostrar_error(
-        control_error,
-        texto,
+    def actualizar_totales():
+        """
+        Calcula los totales utilizando solamente
+        los detalles que existen en memoria.
+
+        No toca Excel.
+        """
+
+        iva_error.value = ""
+        iva_error.visible = False
+
+        if not detalles_factura:
+
+            subtotal_text.value = (
+                "Subtotal: $0.00"
+            )
+
+            iva_text.value = (
+                "IVA: $0.00"
+            )
+
+            total_text.value = (
+                "TOTAL: $0.00"
+            )
+
+            return
+
+        try:
+
+            resultado = calcular_totales(
+                detalles=detalles_factura,
+                iva_porcentaje=(
+                    iva_porcentaje_field.value
+                ),
+            )
+
+        except ValueError as error:
+
+            subtotal_text.value = (
+                "Subtotal: —"
+            )
+
+            iva_text.value = (
+                "IVA: —"
+            )
+
+            total_text.value = (
+                "TOTAL: —"
+            )
+
+            iva_error.value = str(
+                error
+            )
+
+            iva_error.visible = True
+
+            return
+
+        subtotal_text.value = (
+            f'Subtotal: '
+            f'${resultado["subtotal"]:.2f}'
+        )
+
+        iva_text.value = (
+            f'IVA '
+            f'({resultado["iva_porcentaje"]}%): '
+            f'${resultado["iva"]:.2f}'
+        )
+
+        total_text.value = (
+            f'TOTAL: '
+            f'${resultado["total"]:.2f}'
+        )
+
+    # =========================================================
+    # CAMBIAR IVA
+    # =========================================================
+
+    def cambiar_iva(e):
+
+        actualizar_totales()
+
+        page.update()
+
+    iva_porcentaje_field.on_change = (
+        cambiar_iva
+    )
+
+    # =========================================================
+    # ELIMINAR DETALLE
+    # =========================================================
+
+    def eliminar_detalle(
+        indice,
     ):
-        """
-        Muestra el mensaje correspondiente
-        debajo del campo.
-        """
 
-        control_error.value = texto
-        control_error.visible = True
+        if (
+            indice < 0
+            or indice >= len(
+                detalles_factura
+            )
+        ):
+            return
 
-    def limpiar_errores():
-        """
-        Oculta errores anteriores.
-        """
+        detalles_factura.pop(
+            indice
+        )
 
-        empresa_error.value = ""
-        empresa_error.visible = False
+        refrescar_detalles()
 
-        ruc_error.value = ""
-        ruc_error.visible = False
+        actualizar_totales()
 
-        numero_factura_error.value = ""
-        numero_factura_error.visible = False
-
-        fecha_emision_error.value = ""
-        fecha_emision_error.visible = False
-
-        total_error.value = ""
-        total_error.visible = False
-
-        mensaje.value = ""
+        page.update()
 
     # =========================================================
-    # GUARDAR / VALIDAR
+    # CREAR TARJETA DEL DETALLE
+    # =========================================================
+
+    def crear_tarjeta_detalle(
+        detalle,
+        indice,
+    ):
+
+        tipo_mostrado = (
+            detalle["tipo_item"]
+            .replace(
+                "_",
+                " ",
+            )
+            .title()
+        )
+
+        cantidad = detalle[
+            "cantidad"
+        ]
+
+        precio = detalle[
+            "precio_unitario"
+        ]
+
+        subtotal = detalle[
+            "subtotal"
+        ]
+
+        return ft.Container(
+            padding=12,
+            border=ft.Border.all(
+                width=1,
+                color=ft.Colors.OUTLINE,
+            ),
+            border_radius=10,
+            content=ft.Column(
+                controls=[
+                    ft.Text(
+                        detalle[
+                            "descripcion"
+                        ],
+                        weight=(
+                            ft.FontWeight.BOLD
+                        ),
+                    ),
+                    ft.Text(
+                        f"Tipo: {tipo_mostrado}"
+                    ),
+                    ft.Text(
+                        f"Cantidad: {cantidad}"
+                    ),
+                    ft.Text(
+                        f"Precio unitario: "
+                        f"${precio:.2f}"
+                    ),
+                    ft.Text(
+                        f"Subtotal: "
+                        f"${subtotal:.2f}"
+                    ),
+                    ft.Button(
+                        content="Eliminar",
+                        on_click=(
+                            lambda e,
+                            posicion=indice:
+                            eliminar_detalle(
+                                posicion
+                            )
+                        ),
+                    ),
+                ],
+                spacing=4,
+            ),
+        )
+
+    # =========================================================
+    # REFRESCAR DETALLES
+    # =========================================================
+
+    def refrescar_detalles():
+
+        lista_detalles.controls.clear()
+
+        if not detalles_factura:
+
+            lista_detalles.controls.append(
+                ft.Text(
+                    "Todavía no se han agregado "
+                    "ítems a la factura."
+                )
+            )
+
+            return
+
+        for indice, detalle in enumerate(
+            detalles_factura
+        ):
+
+            lista_detalles.controls.append(
+                crear_tarjeta_detalle(
+                    detalle,
+                    indice,
+                )
+            )
+
+    # =========================================================
+    # AGREGAR DETALLE
+    # =========================================================
+
+    def agregar_detalle(e):
+
+        detalle_error.value = ""
+        detalle_error.visible = False
+
+        detalle_nuevo = {
+            "tipo_item":
+                tipo_item_field.value,
+
+            "descripcion":
+                descripcion_field.value,
+
+            "cantidad":
+                cantidad_field.value,
+
+            "precio_unitario":
+                precio_unitario_field.value,
+
+            "id_compra":
+                None,
+        }
+
+        # -----------------------------------------------------
+        # USAMOS EL MISMO MOTOR DE FACTURAS PARA VALIDAR
+        # -----------------------------------------------------
+
+        try:
+
+            resultado = calcular_totales(
+                detalles=[
+                    detalle_nuevo
+                ],
+                iva_porcentaje=0,
+            )
+
+        except ValueError as error:
+
+            detalle_error.value = str(
+                error
+            )
+
+            detalle_error.visible = True
+
+            page.update()
+
+            return
+
+        # -----------------------------------------------------
+        # OBTENER VERSIÓN NORMALIZADA
+        # -----------------------------------------------------
+
+        detalle_normalizado = (
+            resultado[
+                "detalles"
+            ][0]
+        )
+
+        # -----------------------------------------------------
+        # AGREGAR SOLO A MEMORIA
+        # -----------------------------------------------------
+
+        detalles_factura.append(
+            detalle_normalizado
+        )
+
+        # -----------------------------------------------------
+        # LIMPIAR CAMPOS DEL DETALLE
+        # -----------------------------------------------------
+
+        descripcion_field.value = ""
+
+        cantidad_field.value = "1"
+
+        precio_unitario_field.value = ""
+
+        # Dejamos el tipo seleccionado porque muchas veces
+        # se agregan varios conceptos del mismo tipo.
+
+        refrescar_detalles()
+
+        actualizar_totales()
+
+        page.update()
+
+    boton_agregar_detalle = ft.Button(
+        content="+ Agregar detalle",
+        on_click=agregar_detalle,
+    )
+
+    # =========================================================
+    # LIMPIAR FACTURA COMPLETA
+    # =========================================================
+
+    def limpiar_factura():
+
+        empresa_seleccionada_id[
+            "valor"
+        ] = None
+
+        cliente_field.value = ""
+
+        ruc_field.value = ""
+
+        numero_factura_field.value = ""
+
+        fecha_field.value = (
+            datetime.now().strftime(
+                "%d/%m/%Y"
+            )
+        )
+
+        credito_field.value = "0"
+
+        iva_porcentaje_field.value = "15"
+
+        detalles_factura.clear()
+
+        sugerencias_empresas.controls.clear()
+
+        sugerencias_empresas.visible = False
+
+        descripcion_field.value = ""
+
+        cantidad_field.value = "1"
+
+        precio_unitario_field.value = ""
+
+        tipo_item_field.value = (
+            "MANTENIMIENTO"
+        )
+
+        limpiar_errores_factura()
+
+        detalle_error.value = ""
+        detalle_error.visible = False
+
+        refrescar_detalles()
+
+        actualizar_totales()
+
+    # =========================================================
+    # GUARDAR FACTURA
     # =========================================================
 
     def guardar_factura(e):
 
-        limpiar_errores()
+        limpiar_errores_factura()
+
+        mensaje_general.value = ""
 
         formulario_valido = True
 
         # -----------------------------------------------------
-        # EMPRESA
+        # CLIENTE
         # -----------------------------------------------------
 
-        valido, error = (
-            validar_texto_obligatorio(
-                empresa_field.value,
-                "Empresa / Cliente",
-            )
-        )
+        if (
+            empresa_seleccionada_id[
+                "valor"
+            ]
+            is None
+        ):
 
-        if not valido:
-
-            mostrar_error(
-                empresa_error,
-                error,
+            cliente_error.value = (
+                "Seleccione un cliente "
+                "de las sugerencias."
             )
 
-            formulario_valido = False
-
-        # -----------------------------------------------------
-        # RUC
-        # -----------------------------------------------------
-
-        valido, error = validar_ruc(
-            ruc_field.value,
-        )
-
-        if not valido:
-
-            mostrar_error(
-                ruc_error,
-                error,
-            )
+            cliente_error.visible = True
 
             formulario_valido = False
 
@@ -581,9 +920,12 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
 
         if not valido:
 
-            mostrar_error(
-                numero_factura_error,
-                error,
+            numero_factura_error.value = (
+                error
+            )
+
+            numero_factura_error.visible = (
+                True
             )
 
             formulario_valido = False
@@ -594,59 +936,172 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
 
         valido, resultado_fecha = (
             validar_fecha(
-                fecha_emision_field.value,
+                fecha_field.value
             )
         )
 
         if not valido:
 
-            mostrar_error(
-                fecha_emision_error,
-                resultado_fecha,
+            fecha_error.value = (
+                resultado_fecha
             )
+
+            fecha_error.visible = True
 
             formulario_valido = False
 
         # -----------------------------------------------------
-        # TOTAL
+        # CRÉDITO
         # -----------------------------------------------------
 
-        valido, resultado_total = (
-            validar_total(
-                total_field.value,
+        valido, resultado_credito = (
+            validar_credito_dias(
+                credito_field.value
             )
         )
 
         if not valido:
 
-            mostrar_error(
-                total_error,
-                resultado_total,
+            credito_error.value = (
+                resultado_credito
             )
+
+            credito_error.visible = True
 
             formulario_valido = False
 
         # -----------------------------------------------------
-        # RESULTADO
+        # DETALLES
+        # -----------------------------------------------------
+
+        if not detalles_factura:
+
+            detalle_error.value = (
+                "La factura debe contener "
+                "al menos un detalle."
+            )
+
+            detalle_error.visible = True
+
+            formulario_valido = False
+
+        # -----------------------------------------------------
+        # IVA
+        # -----------------------------------------------------
+
+        if detalles_factura:
+
+            try:
+
+                calcular_totales(
+                    detalles=detalles_factura,
+                    iva_porcentaje=(
+                        iva_porcentaje_field.value
+                    ),
+                )
+
+            except ValueError as error:
+
+                iva_error.value = str(
+                    error
+                )
+
+                iva_error.visible = True
+
+                formulario_valido = False
+
+        # -----------------------------------------------------
+        # DETENER SI EXISTEN ERRORES
         # -----------------------------------------------------
 
         if not formulario_valido:
 
-            mensaje.value = (
+            mensaje_general.value = (
                 "Corrija los datos indicados."
             )
 
-            mensaje.color = ft.Colors.RED
+            mensaje_general.color = (
+                ft.Colors.RED
+            )
 
             page.update()
+
             return
 
-        mensaje.value = (
-            "Datos correctos. "
-            "La factura está lista para ser guardada."
+        # =====================================================
+        # GUARDAR
+        # =====================================================
+
+        guardado, resultado = (
+            registrar_factura(
+                id_empresa=(
+                    empresa_seleccionada_id[
+                        "valor"
+                    ]
+                ),
+                empresa=cliente_field.value,
+                ruc=ruc_field.value,
+                numero_factura=(
+                    numero_factura_field.value
+                ),
+                fecha_emision=(
+                    fecha_field.value
+                ),
+                credito_dias=(
+                    resultado_credito
+                ),
+                iva_porcentaje=(
+                    iva_porcentaje_field.value
+                ),
+                detalles=detalles_factura,
+            )
         )
 
-        mensaje.color = ft.Colors.GREEN
+        # -----------------------------------------------------
+        # ERROR
+        # -----------------------------------------------------
+
+        if not guardado:
+
+            mensaje_general.value = str(
+                resultado
+            )
+
+            mensaje_general.color = (
+                ft.Colors.RED
+            )
+
+            page.update()
+
+            return
+
+        # -----------------------------------------------------
+        # ÉXITO
+        # -----------------------------------------------------
+
+        id_factura = resultado[
+            "id_factura"
+        ]
+
+        total = resultado[
+            "total"
+        ]
+
+        mensaje_exito = (
+            f"Factura registrada correctamente. "
+            f"ID interno: {id_factura}. "
+            f"Total: ${total:.2f}"
+        )
+
+        limpiar_factura()
+
+        mensaje_general.value = (
+            mensaje_exito
+        )
+
+        mensaje_general.color = (
+            ft.Colors.GREEN
+        )
 
         page.update()
 
@@ -655,6 +1110,7 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
     # =========================================================
 
     def regresar(e):
+
         volver_menu()
 
     # =========================================================
@@ -677,137 +1133,172 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
     )
 
     # =========================================================
-    # EMPRESA
+    # DATOS DE FACTURA
     # =========================================================
 
-    empresa_control = ft.Column(
+    datos_factura = ft.ResponsiveRow(
+        spacing=15,
+        run_spacing=15,
         controls=[
-            empresa_field,
-            sugerencias_empresa,
-            empresa_error,
-        ],
-        spacing=5,
-    )
+            # -------------------------------------------------
+            # CLIENTE
+            # -------------------------------------------------
 
-    # =========================================================
-    # RUC
-    # =========================================================
-
-    ruc_control = ft.Column(
-        controls=[
-            ruc_field,
-            sugerencias_ruc,
-            ruc_error,
-        ],
-        spacing=5,
-    )
-
-    # =========================================================
-    # NÚMERO DE FACTURA
-    # =========================================================
-
-    numero_factura_control = ft.Column(
-        controls=[
-            numero_factura_field,
-            numero_factura_error,
-        ],
-        spacing=5,
-    )
-
-    # =========================================================
-    # FECHA
-    # =========================================================
-
-    fecha_emision_control = ft.Column(
-        controls=[
-            ft.Row(
-                controls=[
-                    ft.Container(
-                        content=fecha_emision_field,
-                        expand=True,
-                    ),
-                    ft.IconButton(
-                        icon=ft.Icons.CALENDAR_MONTH,
-                        tooltip="Seleccionar fecha",
-                        on_click=abrir_calendario,
-                    ),
-                ],
+            ft.Container(
+                col={
+                    "xs": 12,
+                    "md": 6,
+                },
+                content=ft.Column(
+                    controls=[
+                        cliente_field,
+                        cliente_error,
+                        sugerencias_empresas,
+                    ],
+                    spacing=5,
+                ),
             ),
-            fecha_emision_error,
+
+            # -------------------------------------------------
+            # RUC
+            # -------------------------------------------------
+
+            ft.Container(
+                col={
+                    "xs": 12,
+                    "md": 6,
+                },
+                content=ruc_field,
+            ),
+
+            # -------------------------------------------------
+            # NÚMERO
+            # -------------------------------------------------
+
+            ft.Container(
+                col={
+                    "xs": 12,
+                    "md": 6,
+                },
+                content=ft.Column(
+                    controls=[
+                        numero_factura_field,
+                        numero_factura_error,
+                    ],
+                    spacing=5,
+                ),
+            ),
+
+            # -------------------------------------------------
+            # FECHA
+            # -------------------------------------------------
+
+            ft.Container(
+                col={
+                    "xs": 12,
+                    "md": 6,
+                },
+                content=ft.Column(
+                    controls=[
+                        ft.Row(
+                            controls=[
+                                fecha_field,
+                                boton_calendario,
+                            ]
+                        ),
+                        fecha_error,
+                    ],
+                    spacing=5,
+                ),
+            ),
+
+            # -------------------------------------------------
+            # CRÉDITO
+            # -------------------------------------------------
+
+            ft.Container(
+                col={
+                    "xs": 12,
+                    "md": 6,
+                },
+                content=ft.Column(
+                    controls=[
+                        credito_field,
+                        credito_error,
+                    ],
+                    spacing=5,
+                ),
+            ),
+
+            # -------------------------------------------------
+            # IVA
+            # -------------------------------------------------
+
+            ft.Container(
+                col={
+                    "xs": 12,
+                    "md": 6,
+                },
+                content=ft.Column(
+                    controls=[
+                        iva_porcentaje_field,
+                        iva_error,
+                    ],
+                    spacing=5,
+                ),
+            ),
         ],
-        spacing=5,
     )
 
     # =========================================================
-    # TOTAL
+    # FORMULARIO DE DETALLE
     # =========================================================
 
-    total_control = ft.Column(
-        controls=[
-            total_field,
-            total_error,
-        ],
-        spacing=5,
-    )
-
-    # =========================================================
-    # FORMULARIO RESPONSIVE
-    # =========================================================
-
-    formulario = ft.ResponsiveRow(
+    formulario_detalle = ft.ResponsiveRow(
         spacing=15,
         run_spacing=15,
         controls=[
             ft.Container(
-                content=empresa_control,
                 col={
                     "xs": 12,
                     "md": 6,
                 },
+                content=tipo_item_field,
             ),
+
             ft.Container(
-                content=ruc_control,
                 col={
                     "xs": 12,
                     "md": 6,
                 },
+                content=descripcion_field,
             ),
+
             ft.Container(
-                content=numero_factura_control,
                 col={
                     "xs": 12,
                     "md": 6,
                 },
+                content=cantidad_field,
             ),
+
             ft.Container(
-                content=fecha_emision_control,
                 col={
                     "xs": 12,
                     "md": 6,
                 },
-            ),
-            ft.Container(
-                content=total_control,
-                col={
-                    "xs": 12,
-                    "md": 6,
-                },
+                content=precio_unitario_field,
             ),
         ],
     )
 
     # =========================================================
-    # ACCIONES
+    # PRIMER ESTADO
     # =========================================================
 
-    acciones = ft.Row(
-        controls=[
-            ft.Button(
-                content="Guardar factura",
-                on_click=guardar_factura,
-            ),
-        ],
-    )
+    refrescar_detalles()
+
+    actualizar_totales()
 
     # =========================================================
     # MOSTRAR PANTALLA
@@ -818,12 +1309,85 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
             content=ft.Column(
                 controls=[
                     encabezado,
+
                     ft.Divider(),
-                    formulario,
-                    acciones,
-                    mensaje,
+
+                    # =========================================
+                    # CABECERA DE FACTURA
+                    # =========================================
+
+                    ft.Text(
+                        "Datos de la factura",
+                        size=20,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+
+                    datos_factura,
+
+                    ft.Divider(),
+
+                    # =========================================
+                    # NUEVO DETALLE
+                    # =========================================
+
+                    ft.Text(
+                        "Agregar detalle",
+                        size=20,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+
+                    ft.Text(
+                        "Agregue equipos, repuestos, "
+                        "materiales, servicios, "
+                        "mantenimientos o mano de obra."
+                    ),
+
+                    formulario_detalle,
+
+                    detalle_error,
+
+                    boton_agregar_detalle,
+
+                    ft.Divider(),
+
+                    # =========================================
+                    # DETALLES ACTUALES
+                    # =========================================
+
+                    ft.Text(
+                        "Detalle de factura",
+                        size=20,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+
+                    lista_detalles,
+
+                    ft.Divider(),
+
+                    # =========================================
+                    # TOTALES
+                    # =========================================
+
+                    ft.Text(
+                        "Resumen",
+                        size=20,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+
+                    subtotal_text,
+                    iva_text,
+                    total_text,
+
+                    ft.Divider(),
+
+                    ft.Button(
+                        content="Guardar factura",
+                        on_click=guardar_factura,
+                    ),
+
+                    mensaje_general,
                 ],
-                spacing=20,
+                spacing=15,
             )
         )
     )

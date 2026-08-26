@@ -3,12 +3,13 @@ import flet as ft
 from views.empresa_view import mostrar_registro_empresa
 from views.factura_view import mostrar_registro_factura
 from views.menu_view import mostrar_menu
+from views.producto_view import mostrar_productos
 
 
 def main(page: ft.Page):
 
     # ---------------------------------------------------------
-    # CONFIGURACIÓN
+    # CONFIGURACIÓN GENERAL
     # ---------------------------------------------------------
 
     page.title = (
@@ -27,6 +28,7 @@ def main(page: ft.Page):
             page=page,
             abrir_factura=abrir_factura,
             abrir_empresa=abrir_empresa,
+            abrir_productos=abrir_productos,
         )
 
     def abrir_factura():
@@ -39,6 +41,13 @@ def main(page: ft.Page):
     def abrir_empresa():
 
         mostrar_registro_empresa(
+            page=page,
+            volver_menu=abrir_menu,
+        )
+
+    def abrir_productos():
+
+        mostrar_productos(
             page=page,
             volver_menu=abrir_menu,
         )

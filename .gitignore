@@ -1,0 +1,31 @@
+# Entorno virtual de Python
+.venv/
+
+# Archivos temporales de Python
+__pycache__/
+*.pyc
+
+# Configuración local de VS Code
+.vscode/
+
+# Archivos Excel con datos reales
+*.xlsx
+
+# Carpeta de datos de la empresa
+data/
+
+# Fotografías de facturas
+facturas/
+
+# Comprobantes de pago
+comprobantes/
+
+# Variables privadas y credenciales
+.env
+
+# Archivos temporales de Windows/macOS
+Thumbs.db
+.DS_Store
+
+# Archivos internos generados por Flet
+.flet/

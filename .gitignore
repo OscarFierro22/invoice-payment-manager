@@ -1,31 +1,58 @@
-# Entorno virtual de Python
+# ============================================================
+# ENTORNO VIRTUAL
+# ============================================================
 .venv/
 
-# Archivos temporales de Python
+# ============================================================
+# ARCHIVOS INTERNOS GENERADOS POR FLET
+# ============================================================
+.flet/
+
+# ============================================================
+# ARCHIVOS TEMPORALES DE PYTHON
+# ============================================================
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# Configuración local de VS Code
+# ============================================================
+# CONFIGURACIÓN LOCAL DE VS CODE
+# ============================================================
 .vscode/
 
-# Archivos Excel con datos reales
-*.xlsx
-
-# Carpeta de datos de la empresa
+# ============================================================
+# DATOS REALES DE LA EMPRESA
+# ============================================================
 data/
 
-# Fotografías de facturas
-facturas/
+# Protección adicional para archivos Excel
+*.xlsx
+*.xlsm
 
-# Comprobantes de pago
+# Archivos temporales creados por Excel
+~$*.xlsx
+~$*.xlsm
+
+# ============================================================
+# FOTOGRAFÍAS Y COMPROBANTES
+# ============================================================
+facturas/
 comprobantes/
 
-# Variables privadas y credenciales
+# ============================================================
+# VARIABLES PRIVADAS Y CREDENCIALES
+# ============================================================
 .env
+.env.*
 
-# Archivos temporales de Windows/macOS
+# ============================================================
+# LOGS
+# ============================================================
+*.log
+
+# ============================================================
+# ARCHIVOS TEMPORALES DEL SISTEMA
+# ============================================================
 Thumbs.db
 .DS_Store
-
-# Archivos internos generados por Flet
-.flet/

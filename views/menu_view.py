@@ -1,22 +1,17 @@
 import flet as ft
 
 
-def mostrar_menu(page: ft.Page, abrir_factura):
+def mostrar_menu(
+    page: ft.Page,
+    abrir_factura,
+    abrir_empresa,
+):
     """
-    Parameters
-    ----------
-    page:
-        Página principal proporcionada por Flet.
-
-    abrir_factura:
-        Función que se ejecutará cuando el usuario
-        presione el botón "Registrar factura".
+    Construye y muestra el menú principal.
     """
 
-    # Eliminamos los controles de la pantalla anterior.
     page.clean()
 
-    # Mensaje inferior del menú.
     status_text = ft.Text(
         "Seleccione una opción del menú.",
         size=16,
@@ -29,12 +24,25 @@ def mostrar_menu(page: ft.Page, abrir_factura):
     def registrar_factura(e):
         abrir_factura()
 
+    def registrar_empresa(e):
+        abrir_empresa()
+
     def registrar_pago(e):
-        status_text.value = "El módulo Registrar pago se implementará próximamente."
+
+        status_text.value = (
+            "El módulo Registrar pago "
+            "se implementará próximamente."
+        )
+
         page.update()
 
     def buscar(e):
-        status_text.value = "El módulo Buscar se implementará próximamente."
+
+        status_text.value = (
+            "El módulo Buscar "
+            "se implementará próximamente."
+        )
+
         page.update()
 
     # ---------------------------------------------------------
@@ -48,7 +56,7 @@ def mostrar_menu(page: ft.Page, abrir_factura):
         content=ft.Column(
             controls=[
                 ft.Text(
-                    "******* EMPRESA *******",
+                    "ELECTROPART SA",
                     size=28,
                     weight=ft.FontWeight.BOLD,
                     color=ft.Colors.WHITE,
@@ -77,7 +85,8 @@ def mostrar_menu(page: ft.Page, abrir_factura):
                 on_click=registrar_factura,
                 col={
                     "xs": 12,
-                    "md": 4,
+                    "sm": 6,
+                    "lg": 3,
                 },
             ),
             ft.Button(
@@ -86,7 +95,8 @@ def mostrar_menu(page: ft.Page, abrir_factura):
                 on_click=registrar_pago,
                 col={
                     "xs": 12,
-                    "md": 4,
+                    "sm": 6,
+                    "lg": 3,
                 },
             ),
             ft.Button(
@@ -95,15 +105,22 @@ def mostrar_menu(page: ft.Page, abrir_factura):
                 on_click=buscar,
                 col={
                     "xs": 12,
-                    "md": 4,
+                    "sm": 6,
+                    "lg": 3,
+                },
+            ),
+            ft.Button(
+                content="Registrar empresa",
+                height=70,
+                on_click=registrar_empresa,
+                col={
+                    "xs": 12,
+                    "sm": 6,
+                    "lg": 3,
                 },
             ),
         ],
     )
-
-    # ---------------------------------------------------------
-    # MOSTRAR PANTALLA
-    # ---------------------------------------------------------
 
     page.add(
         ft.SafeArea(

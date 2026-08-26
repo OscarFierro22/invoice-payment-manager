@@ -1,8 +1,9 @@
 from datetime import datetime
+import unicodedata
 
 import flet as ft
 
-from services.empresa_service import buscar_empresas
+from services.empresa_service import listar_empresas
 
 from utils.validators import (
     validar_fecha,
@@ -14,20 +15,174 @@ from utils.validators import (
 
 def mostrar_registro_factura(page: ft.Page, volver_menu):
     """
-    Muestra el formulario para registrar una factura.
+    Pantalla para registrar una factura.
 
     Funciones actuales:
-    - Buscar empresas por nombre.
-    - Buscar empresas por RUC.
-    - Autocompletar nombre y RUC.
-    - Escribir fecha manualmente.
-    - Seleccionar fecha desde calendario.
-    - Validar los datos ingresados.
+    - Carga las empresas una sola vez al abrir la pantalla.
+    - Busca empresas en memoria.
+    - Filtra por nombre.
+    - Filtra por RUC.
+    - Autocompleta nombre y RUC al seleccionar.
+    - Permite escribir la fecha manualmente.
+    - Permite seleccionar la fecha con calendario.
+    - Valida los datos.
 
     Todavía no guarda la factura en Excel.
     """
 
     page.clean()
+
+    # =========================================================
+    # NORMALIZACIÓN DE TEXTO
+    # =========================================================
+
+    def normalizar_texto(texto):
+        """
+        Prepara un texto para realizar búsquedas.
+
+        Ejemplos:
+        "Hotel Río Amazonas" -> "hotel rio amazonas"
+        " RÍO "              -> "rio"
+
+        Esto permite que:
+        rio
+        encuentre:
+        Río
+        """
+
+        texto = str(texto or "").strip().lower()
+
+        texto = unicodedata.normalize(
+            "NFD",
+            texto,
+        )
+
+        texto = "".join(
+            caracter
+            for caracter in texto
+            if unicodedata.category(caracter) != "Mn"
+        )
+
+        return texto
+
+    # =========================================================
+    # CACHÉ DE EMPRESAS
+    # =========================================================
+
+    def cargar_empresas():
+        """
+        Lee las empresas desde Excel UNA SOLA VEZ
+        al abrir esta pantalla.
+
+        Además crea campos auxiliares normalizados
+        para acelerar las búsquedas posteriores.
+        """
+
+        empresas_excel = listar_empresas()
+
+        empresas_preparadas = []
+
+        for empresa in empresas_excel:
+
+            empresa_preparada = {
+                "id": empresa["id"],
+                "nombre": empresa["nombre"],
+                "ruc": empresa["ruc"],
+
+                # Estos dos campos solo se usan
+                # internamente para buscar.
+                "_nombre_busqueda": normalizar_texto(
+                    empresa["nombre"]
+                ),
+                "_ruc_busqueda": normalizar_texto(
+                    empresa["ruc"]
+                ),
+            }
+
+            empresas_preparadas.append(
+                empresa_preparada
+            )
+
+        return empresas_preparadas
+
+    # ESTA ES NUESTRA CACHÉ.
+    #
+    # listar_empresas() solamente se ejecuta aquí,
+    # cuando se abre Registrar factura.
+    empresas_cache = cargar_empresas()
+
+    # =========================================================
+    # FILTRAR EMPRESAS EN MEMORIA
+    # =========================================================
+
+    def filtrar_empresas(
+        texto,
+        campo,
+        limite=8,
+    ):
+        """
+        Busca dentro de empresas_cache.
+
+        NO abre Excel.
+
+        campo:
+        - "nombre"
+        - "ruc"
+        """
+
+        texto_busqueda = normalizar_texto(
+            texto
+        )
+
+        if texto_busqueda == "":
+            return []
+
+        coincidencias_inicio = []
+        coincidencias_parciales = []
+
+        for empresa in empresas_cache:
+
+            if campo == "nombre":
+                valor = empresa[
+                    "_nombre_busqueda"
+                ]
+
+            elif campo == "ruc":
+                valor = empresa[
+                    "_ruc_busqueda"
+                ]
+
+            else:
+                continue
+
+            # ---------------------------------------------
+            # PRIORIDAD 1:
+            # empieza exactamente por lo escrito
+            # ---------------------------------------------
+
+            if valor.startswith(
+                texto_busqueda
+            ):
+                coincidencias_inicio.append(
+                    empresa
+                )
+
+            # ---------------------------------------------
+            # PRIORIDAD 2:
+            # contiene el texto en otra posición
+            # ---------------------------------------------
+
+            elif texto_busqueda in valor:
+                coincidencias_parciales.append(
+                    empresa
+                )
+
+        resultados = (
+            coincidencias_inicio
+            + coincidencias_parciales
+        )
+
+        return resultados[:limite]
 
     # =========================================================
     # MENSAJES DE ERROR
@@ -88,7 +243,7 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
     )
 
     # =========================================================
-    # CAMPOS DEL FORMULARIO
+    # CAMPOS
     # =========================================================
 
     empresa_field = ft.TextField(
@@ -118,26 +273,31 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
     )
 
     # =========================================================
-    # AUTOCOMPLETADO DE EMPRESAS
+    # SELECCIONAR EMPRESA
     # =========================================================
 
     def seleccionar_empresa(empresa):
         """
-        Completa automáticamente los campos de nombre y RUC
-        cuando el usuario selecciona una empresa.
+        Completa nombre y RUC usando la empresa
+        seleccionada.
         """
 
-        empresa_field.value = empresa["nombre"]
-        ruc_field.value = empresa["ruc"]
+        empresa_field.value = (
+            empresa["nombre"]
+        )
 
-        # Ocultar sugerencias.
+        ruc_field.value = (
+            empresa["ruc"]
+        )
+
+        # Ocultar resultados.
         sugerencias_empresa.controls.clear()
         sugerencias_ruc.controls.clear()
 
         sugerencias_empresa.visible = False
         sugerencias_ruc.visible = False
 
-        # Quitar errores anteriores.
+        # Quitar posibles errores anteriores.
         empresa_error.value = ""
         empresa_error.visible = False
 
@@ -146,9 +306,14 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
 
         page.update()
 
+    # =========================================================
+    # CREAR OPCIÓN VISUAL
+    # =========================================================
+
     def crear_opcion_empresa(empresa):
         """
-        Crea un botón para cada resultado encontrado.
+        Convierte una empresa encontrada en
+        una opción seleccionable.
         """
 
         texto = (
@@ -158,13 +323,21 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
 
         return ft.Button(
             content=texto,
-            on_click=lambda e, emp=empresa: seleccionar_empresa(emp),
+            on_click=lambda e, emp=empresa:
+                seleccionar_empresa(emp),
         )
+
+    # =========================================================
+    # BUSCAR POR NOMBRE
+    # =========================================================
 
     def buscar_por_nombre(e):
         """
-        Busca coincidencias mientras el usuario escribe
-        el nombre de la empresa.
+        Se ejecuta mientras se escribe el nombre.
+
+        IMPORTANTE:
+        la búsqueda ocurre sobre empresas_cache,
+        NO sobre Excel.
         """
 
         texto = empresa_field.value or ""
@@ -173,35 +346,49 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
 
         if texto.strip() == "":
             sugerencias_empresa.visible = False
+
             page.update()
             return
 
-        resultados = buscar_empresas(
-            texto,
+        resultados = filtrar_empresas(
+            texto=texto,
             campo="nombre",
         )
 
         if not resultados:
             sugerencias_empresa.visible = False
+
             page.update()
             return
 
         for empresa in resultados:
+
+            opcion = crear_opcion_empresa(
+                empresa
+            )
+
             sugerencias_empresa.controls.append(
-                crear_opcion_empresa(empresa)
+                opcion
             )
 
         sugerencias_empresa.visible = True
 
-        # Ocultamos las sugerencias del otro campo.
+        # Solo mostramos una lista de resultados
+        # a la vez.
+        sugerencias_ruc.controls.clear()
         sugerencias_ruc.visible = False
 
         page.update()
 
+    # =========================================================
+    # BUSCAR POR RUC
+    # =========================================================
+
     def buscar_por_ruc(e):
         """
-        Busca coincidencias mientras el usuario escribe
-        el RUC.
+        Se ejecuta mientras se escribe el RUC.
+
+        También busca únicamente en memoria.
         """
 
         texto = ruc_field.value or ""
@@ -210,34 +397,47 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
 
         if texto.strip() == "":
             sugerencias_ruc.visible = False
+
             page.update()
             return
 
-        resultados = buscar_empresas(
-            texto,
+        resultados = filtrar_empresas(
+            texto=texto,
             campo="ruc",
         )
 
         if not resultados:
             sugerencias_ruc.visible = False
+
             page.update()
             return
 
         for empresa in resultados:
+
+            opcion = crear_opcion_empresa(
+                empresa
+            )
+
             sugerencias_ruc.controls.append(
-                crear_opcion_empresa(empresa)
+                opcion
             )
 
         sugerencias_ruc.visible = True
 
-        # Ocultamos las sugerencias del otro campo.
+        sugerencias_empresa.controls.clear()
         sugerencias_empresa.visible = False
 
         page.update()
 
-    # Conectamos los eventos después de crear las funciones.
-    empresa_field.on_change = buscar_por_nombre
-    ruc_field.on_change = buscar_por_ruc
+    # Conectamos los eventos después de crear
+    # las funciones.
+    empresa_field.on_change = (
+        buscar_por_nombre
+    )
+
+    ruc_field.on_change = (
+        buscar_por_ruc
+    )
 
     # =========================================================
     # CALENDARIO
@@ -245,15 +445,17 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
 
     def fecha_seleccionada(e):
         """
-        Copia al campo de fecha el día escogido
-        en el calendario.
+        Copia la fecha seleccionada en el calendario
+        al campo de texto.
         """
 
         if selector_fecha.value is None:
             return
 
         fecha_emision_field.value = (
-            selector_fecha.value.strftime("%d/%m/%Y")
+            selector_fecha.value.strftime(
+                "%d/%m/%Y"
+            )
         )
 
         fecha_emision_error.value = ""
@@ -262,22 +464,36 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
         page.update()
 
     selector_fecha = ft.DatePicker(
-        first_date=datetime(2020, 1, 1),
-        last_date=datetime(2035, 12, 31),
+        first_date=datetime(
+            2020,
+            1,
+            1,
+        ),
+        last_date=datetime(
+            2035,
+            12,
+            31,
+        ),
         current_date=datetime.now(),
         on_change=fecha_seleccionada,
     )
 
     def abrir_calendario(e):
-        page.show_dialog(selector_fecha)
+        page.show_dialog(
+            selector_fecha
+        )
 
     # =========================================================
-    # FUNCIONES DE ERROR
+    # FUNCIONES PARA ERRORES
     # =========================================================
 
-    def mostrar_error(control_error, texto):
+    def mostrar_error(
+        control_error,
+        texto,
+    ):
         """
-        Muestra un mensaje debajo del campo incorrecto.
+        Muestra el mensaje correspondiente
+        debajo del campo.
         """
 
         control_error.value = texto
@@ -285,7 +501,7 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
 
     def limpiar_errores():
         """
-        Limpia todos los mensajes de error anteriores.
+        Oculta errores anteriores.
         """
 
         empresa_error.value = ""
@@ -306,10 +522,11 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
         mensaje.value = ""
 
     # =========================================================
-    # VALIDACIÓN DEL FORMULARIO
+    # GUARDAR / VALIDAR
     # =========================================================
 
     def guardar_factura(e):
+
         limpiar_errores()
 
         formulario_valido = True
@@ -318,12 +535,15 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
         # EMPRESA
         # -----------------------------------------------------
 
-        valido, error = validar_texto_obligatorio(
-            empresa_field.value,
-            "Empresa / Cliente",
+        valido, error = (
+            validar_texto_obligatorio(
+                empresa_field.value,
+                "Empresa / Cliente",
+            )
         )
 
         if not valido:
+
             mostrar_error(
                 empresa_error,
                 error,
@@ -340,6 +560,7 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
         )
 
         if not valido:
+
             mostrar_error(
                 ruc_error,
                 error,
@@ -351,12 +572,15 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
         # NÚMERO DE FACTURA
         # -----------------------------------------------------
 
-        valido, error = validar_texto_obligatorio(
-            numero_factura_field.value,
-            "Número de factura",
+        valido, error = (
+            validar_texto_obligatorio(
+                numero_factura_field.value,
+                "Número de factura",
+            )
         )
 
         if not valido:
+
             mostrar_error(
                 numero_factura_error,
                 error,
@@ -365,14 +589,17 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
             formulario_valido = False
 
         # -----------------------------------------------------
-        # FECHA DE EMISIÓN
+        # FECHA
         # -----------------------------------------------------
 
-        valido, resultado_fecha = validar_fecha(
-            fecha_emision_field.value,
+        valido, resultado_fecha = (
+            validar_fecha(
+                fecha_emision_field.value,
+            )
         )
 
         if not valido:
+
             mostrar_error(
                 fecha_emision_error,
                 resultado_fecha,
@@ -384,11 +611,14 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
         # TOTAL
         # -----------------------------------------------------
 
-        valido, resultado_total = validar_total(
-            total_field.value,
+        valido, resultado_total = (
+            validar_total(
+                total_field.value,
+            )
         )
 
         if not valido:
+
             mostrar_error(
                 total_error,
                 resultado_total,
@@ -401,7 +631,11 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
         # -----------------------------------------------------
 
         if not formulario_valido:
-            mensaje.value = "Corrija los datos indicados."
+
+            mensaje.value = (
+                "Corrija los datos indicados."
+            )
+
             mensaje.color = ft.Colors.RED
 
             page.update()
@@ -417,7 +651,7 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
         page.update()
 
     # =========================================================
-    # NAVEGACIÓN
+    # VOLVER
     # =========================================================
 
     def regresar(e):
@@ -443,7 +677,7 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
     )
 
     # =========================================================
-    # GRUPO EMPRESA
+    # EMPRESA
     # =========================================================
 
     empresa_control = ft.Column(
@@ -456,7 +690,7 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
     )
 
     # =========================================================
-    # GRUPO RUC
+    # RUC
     # =========================================================
 
     ruc_control = ft.Column(
@@ -469,7 +703,7 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
     )
 
     # =========================================================
-    # GRUPO NÚMERO DE FACTURA
+    # NÚMERO DE FACTURA
     # =========================================================
 
     numero_factura_control = ft.Column(
@@ -481,7 +715,7 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
     )
 
     # =========================================================
-    # GRUPO FECHA
+    # FECHA
     # =========================================================
 
     fecha_emision_control = ft.Column(
@@ -505,7 +739,7 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
     )
 
     # =========================================================
-    # GRUPO TOTAL
+    # TOTAL
     # =========================================================
 
     total_control = ft.Column(
@@ -563,7 +797,7 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
     )
 
     # =========================================================
-    # BOTONES
+    # ACCIONES
     # =========================================================
 
     acciones = ft.Row(
@@ -574,6 +808,7 @@ def mostrar_registro_factura(page: ft.Page, volver_menu):
             ),
         ],
     )
+
     # =========================================================
     # MOSTRAR PANTALLA
     # =========================================================
